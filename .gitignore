@@ -152,7 +152,6 @@ runs
 cache
 *.out
 *.o
-data
 figures/*.pdf
 outputs
 debug

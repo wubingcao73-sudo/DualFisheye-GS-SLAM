@@ -1,0 +1,22 @@
+inherit_from: config/replica_config.yaml
+
+StereoInput:
+  camera_model: double_sphere
+  camera_order: [cam0, cam1]
+  camera_parameter_order: [xi, alpha, fx, fy, cx, cy]
+  calibration_value_order: [xi, alpha, fx, fy, cx, cy, width, height]
+  native_resolution: true
+  rgb_pattern: "{camera}/rgb/{index:06d}RGB.png"
+  range_pattern: "{camera}/depth_exr/{index:06d}Depth.exr"
+  depth_preview_pattern: "{camera}/depth_png/{index:06d}DepthVis.png"
+  intrinsics_pattern: "calibration/{camera}.txt"
+  extrinsics: calibration/extrinsics.txt
+  timestamps: timestamps.txt
+  rig_poses: poses/rig.txt
+  pose_file_convention: T_world_from_blender_source
+  extrinsics_file_convention: T_rig_from_blender_camera
+  camera_coordinate_convention: x_right_y_down_z_forward
+  blender_camera_from_ds_camera: [1, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1]
+  distance_unit: meter
+  depth_semantics: radial_range
+  invalid_range_sentinel: 1.0e10

@@ -358,8 +358,10 @@ debug/camera_model/reprojection/
 ## 测试命令
 
 ```bash
+python tests/test_double_sphere_camera.py
+python tests/test_stereo_fisheye_dataset.py
 conda run -n hislam2 python -m unittest discover -s tests -p 'test_*.py' -v
 conda run -n hislam2 python scripts/validate_camera_geometry.py
 ```
 
-最终结果：13 项单元测试通过；完整 Camera Geometry V0 报告状态为 `passed`。
+两个测试文件均支持从项目根目录直接执行，也支持 `unittest discover`。最终结果：13 项单元测试通过；完整 Camera Geometry V0 报告状态为 `passed`。

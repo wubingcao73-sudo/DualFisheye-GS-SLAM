@@ -12,6 +12,7 @@ import numpy as np
 import torch
 
 from .frame_types import StereoFisheyeFrame
+from ..range import GroundTruthRangeProvider
 
 
 DEFAULT_DATA_ROOT = Path(
@@ -22,7 +23,6 @@ _CAMERAS = ("cam0", "cam1")
 _RGB_PATTERN = re.compile(r"^(\d{6})RGB\.png$")
 _RANGE_PATTERN = re.compile(r"^(\d{6})Depth\.exr$")
 _DEPTH_VIS_PATTERN = re.compile(r"^(\d{6})DepthVis\.png$")
-_INVALID_RANGE_SENTINEL = 1.0e10
 _T_BLENDER_CAMERA_FROM_DS_CAMERA = np.diag([1.0, -1.0, -1.0, 1.0])
 
 
@@ -317,11 +317,6 @@ class StereoFisheyeDataset(Sequence[StereoFisheyeFrame]):
 
         rgb_tensor = torch.stack(rgb_images)
         range_tensor = torch.stack(ranges)
-        observation_valid = (
-            torch.isfinite(range_tensor)
-            & (range_tensor > 0.0)
-            & (range_tensor < _INVALID_RANGE_SENTINEL * (1.0 - 1.0e-6))
-        )
         return StereoFisheyeFrame(
             index=index,
             frame_number=int(self.frame_numbers[item]),
@@ -333,7 +328,6 @@ class StereoFisheyeDataset(Sequence[StereoFisheyeFrame]):
             T_rig_from_camera=torch.from_numpy(self.T_rig_from_camera.copy()),
             gt_T_world_from_rig=torch.from_numpy(self.gt_T_world_from_rig[item].copy()),
             gt_range=range_tensor,
-            range_observation_valid=observation_valid,
         )
 
     @property
@@ -343,7 +337,9 @@ class StereoFisheyeDataset(Sequence[StereoFisheyeFrame]):
 
 
 def _preview_range_correlation(
-    dataset: StereoFisheyeDataset, frame: StereoFisheyeFrame
+    dataset: StereoFisheyeDataset,
+    frame: StereoFisheyeFrame,
+    observation_valid: torch.Tensor,
 ) -> List[float]:
     correlations = []
     for camera_index in range(2):
@@ -353,7 +349,7 @@ def _preview_range_correlation(
         if preview is None:
             raise ValueError(f"failed to read depth preview for frame {frame.index}")
         gt_range = frame.gt_range[camera_index].numpy()
-        valid = frame.range_observation_valid[camera_index].numpy()
+        valid = observation_valid[camera_index].numpy()
         stride = max(1, int(np.sqrt(gt_range.size / 100_000)))
         sampled_range = gt_range[::stride, ::stride][valid[::stride, ::stride]]
         sampled_preview = preview[::stride, ::stride][valid[::stride, ::stride]]
@@ -374,14 +370,16 @@ def validate_dataset(
 ) -> dict:
     """Validate the manifest and decode representative native-resolution frames."""
     dataset = StereoFisheyeDataset(data_root)
+    range_provider = GroundTruthRangeProvider()
     if sample_indices is None:
         sample_indices = sorted({0, len(dataset) // 2, len(dataset) - 1})
 
     samples = []
     for item in sample_indices:
         frame = dataset[item]
-        valid_ratios = frame.range_observation_valid.float().mean(dim=(1, 2)).tolist()
-        if not frame.range_observation_valid.any():
+        range_observation = range_provider.provide(frame)
+        valid_ratios = range_observation.observation_valid.float().mean(dim=(1, 2)).tolist()
+        if not range_observation.observation_valid.any():
             raise ValueError(f"frame {frame.index} has no valid range pixels")
         samples.append(
             {
@@ -391,7 +389,9 @@ def validate_dataset(
                 "rgb_shape": list(frame.rgb.shape),
                 "range_shape": list(frame.gt_range.shape),
                 "range_valid_ratio": valid_ratios,
-                "range_preview_correlation": _preview_range_correlation(dataset, frame),
+                "range_preview_correlation": _preview_range_correlation(
+                    dataset, frame, range_observation.observation_valid
+                ),
             }
         )
 

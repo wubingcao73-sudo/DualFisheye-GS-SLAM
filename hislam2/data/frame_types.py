@@ -21,4 +21,3 @@ class StereoFisheyeFrame:
     T_rig_from_camera: torch.Tensor
     gt_T_world_from_rig: torch.Tensor
     gt_range: torch.Tensor
-    range_observation_valid: torch.Tensor

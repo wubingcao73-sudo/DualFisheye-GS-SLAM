@@ -23,6 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from hislam2.camera import DoubleSphereCamera  # noqa: E402
 from hislam2.data import DEFAULT_DATA_ROOT, StereoFisheyeDataset  # noqa: E402
+from hislam2.range import GroundTruthRangeProvider  # noqa: E402
 
 
 CAMERA_LABELS = ("front", "back")
@@ -330,16 +331,18 @@ def save_pointcloud_preview(
 def create_pointclouds(
     dataset: StereoFisheyeDataset,
     cameras: Sequence[DoubleSphereCamera],
+    range_provider: GroundTruthRangeProvider,
     frame_index: int,
     output_dir: Path,
 ) -> dict:
     frame = dataset[frame_index]
+    range_observation = range_provider.provide(frame)
     world_sets = []
     result = {}
     for camera_index, label in enumerate(CAMERA_LABELS):
         camera = cameras[camera_index]
         rays, model_valid = camera.get_ray_lut(dtype=torch.float32)
-        observation_valid = frame.range_observation_valid[camera_index]
+        observation_valid = range_observation.observation_valid[camera_index]
         pixels_in_image = torch.ones_like(model_valid)
         valid = model_valid & pixels_in_image & observation_valid
         points_camera = (
@@ -391,6 +394,7 @@ def save_mask(path: Path, mask: np.ndarray) -> None:
 def forward_reprojection(
     source_frame,
     target_frame,
+    range_provider: GroundTruthRangeProvider,
     camera: DoubleSphereCamera,
     camera_index: int,
     T_target_from_source: np.ndarray,
@@ -398,11 +402,13 @@ def forward_reprojection(
 ) -> dict:
     height, width = camera.height, camera.width
     rays, model_valid = camera.get_ray_lut(dtype=torch.float32)
-    source_range = source_frame.gt_range[camera_index]
-    source_observation = source_frame.range_observation_valid[camera_index]
+    source_range_observation = range_provider.provide(source_frame)
+    target_range_observation = range_provider.provide(target_frame)
+    source_range = source_range_observation.range_m[camera_index]
+    source_observation = source_range_observation.observation_valid[camera_index]
     source_valid = model_valid & source_observation
-    target_range = target_frame.gt_range[camera_index].numpy()
-    target_observation = target_frame.range_observation_valid[camera_index].numpy()
+    target_range = target_range_observation.range_m[camera_index].numpy()
+    target_observation = target_range_observation.observation_valid[camera_index].numpy()
 
     z_buffer = np.full(height * width, np.inf, dtype=np.float32)
     row_chunk = 128
@@ -507,6 +513,7 @@ def forward_reprojection(
 def reprojection_suite(
     dataset: StereoFisheyeDataset,
     cameras: Sequence[DoubleSphereCamera],
+    range_provider: GroundTruthRangeProvider,
     output_dir: Path,
 ) -> dict:
     results = {}
@@ -521,6 +528,7 @@ def reprojection_suite(
             results[name] = forward_reprojection(
                 source_frame,
                 target_frame,
+                range_provider,
                 cameras[camera_index],
                 camera_index,
                 T_target_from_source,
@@ -562,6 +570,7 @@ def main() -> int:
     try:
         dataset = StereoFisheyeDataset(args.data_root)
         cameras = make_cameras(dataset)
+        range_provider = GroundTruthRangeProvider()
         report["pose_composition_max_error"] = dataset.pose_composition_max_error
         for camera, name in zip(cameras, ("cam0", "cam1")):
             metrics, lut64, valid64 = mathematical_metrics(camera, name)
@@ -574,12 +583,12 @@ def main() -> int:
 
         if not args.skip_pointclouds:
             report["pointclouds"] = create_pointclouds(
-                dataset, cameras, args.frame_index, args.output
+                dataset, cameras, range_provider, args.frame_index, args.output
             )
             write_report(report_path, report)
         if not args.skip_reprojection:
             report["reprojection"] = reprojection_suite(
-                dataset, cameras, args.output / "reprojection"
+                dataset, cameras, range_provider, args.output / "reprojection"
             )
             write_report(report_path, report)
 

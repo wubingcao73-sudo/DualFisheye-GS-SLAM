@@ -75,7 +75,7 @@ class DoubleSphereCamera(CameraModel):
                 f"{name} must have shape [..., {final_size}], got {tuple(value.shape)}"
             )
 
-    def project(self, points: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def _projection_terms(self, points: torch.Tensor):
         self._check_tensor(points, 3, "points")
         X, Y, Z = points.unbind(dim=-1)
         d1 = torch.linalg.vector_norm(points, dim=-1)
@@ -84,14 +84,17 @@ class DoubleSphereCamera(CameraModel):
         denominator = self.alpha * d2 + (1.0 - self.alpha) * z1
 
         finite = torch.isfinite(points).all(dim=-1)
-        scale = torch.maximum(d1, torch.ones_like(d1))
-        epsilon = torch.finfo(points.dtype).eps * 16.0 * scale
+        denominator_epsilon = torch.finfo(points.dtype).eps * 16.0 * d1
         model_valid = (
             finite
-            & (d1 > epsilon)
+            & (d1 > torch.finfo(points.dtype).tiny)
             & (Z > -self._w2 * d1)
-            & (denominator > epsilon)
+            & (denominator > denominator_epsilon)
         )
+        return X, Y, d1, z1, d2, denominator, model_valid
+
+    def project(self, points: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        X, Y, _, _, _, denominator, model_valid = self._projection_terms(points)
 
         safe_denominator = torch.where(model_valid, denominator, torch.ones_like(denominator))
         u = self.fx * X / safe_denominator + self.cx
@@ -99,6 +102,51 @@ class DoubleSphereCamera(CameraModel):
         pixels = torch.stack((u, v), dim=-1)
         pixels = torch.where(model_valid[..., None], pixels, torch.zeros_like(pixels))
         return pixels, model_valid
+
+    def project_jacobian(
+        self, points: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Project points and analytically differentiate pixels w.r.t. XYZ."""
+        X, Y, d1, z1, d2, denominator, model_valid = self._projection_terms(points)
+
+        safe_d1 = torch.where(model_valid, d1, torch.ones_like(d1))
+        safe_d2 = torch.where(model_valid, d2, torch.ones_like(d2))
+        safe_denominator = torch.where(model_valid, denominator, torch.ones_like(denominator))
+
+        d_d1 = points / safe_d1[..., None]
+        dz1 = self.xi * d_d1
+        dz1 = dz1 + points.new_tensor((0.0, 0.0, 1.0))
+
+        d_d2 = z1[..., None] * dz1
+        d_d2 = d_d2 + torch.stack((X, Y, torch.zeros_like(X)), dim=-1)
+        d_d2 = d_d2 / safe_d2[..., None]
+        d_denominator = self.alpha * d_d2 + (1.0 - self.alpha) * dz1
+
+        denominator_squared = safe_denominator * safe_denominator
+        x_basis = points.new_tensor((1.0, 0.0, 0.0))
+        y_basis = points.new_tensor((0.0, 1.0, 0.0))
+        du = self.fx * (
+            x_basis / safe_denominator[..., None]
+            - X[..., None] * d_denominator / denominator_squared[..., None]
+        )
+        dv = self.fy * (
+            y_basis / safe_denominator[..., None]
+            - Y[..., None] * d_denominator / denominator_squared[..., None]
+        )
+        jacobian = torch.stack((du, dv), dim=-2)
+
+        pixels = torch.stack(
+            (
+                self.fx * X / safe_denominator + self.cx,
+                self.fy * Y / safe_denominator + self.cy,
+            ),
+            dim=-1,
+        )
+        pixels = torch.where(model_valid[..., None], pixels, torch.zeros_like(pixels))
+        jacobian = torch.where(
+            model_valid[..., None, None], jacobian, torch.zeros_like(jacobian)
+        )
+        return pixels, model_valid, jacobian
 
     def _unprojection_terms(self, pixels: torch.Tensor):
         self._check_tensor(pixels, 2, "pixels")

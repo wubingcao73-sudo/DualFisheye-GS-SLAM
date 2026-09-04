@@ -22,6 +22,17 @@ class CameraModel(ABC):
         """Project camera-frame points ``[..., 3]`` to pixels ``[..., 2]``."""
 
     @abstractmethod
+    def project_jacobian(
+        self, points: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Project points and return ``d(pixel) / d(point)``.
+
+        Returns pixels ``[..., 2]``, mathematical validity ``[...]`` and the
+        analytic point Jacobian ``[..., 2, 3]``. Values at invalid points are
+        placeholders and must not be consumed.
+        """
+
+    @abstractmethod
     def unproject(self, pixels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Unproject pixels ``[..., 2]`` to unit rays ``[..., 3]``."""
 
